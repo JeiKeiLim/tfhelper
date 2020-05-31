@@ -116,9 +116,9 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
             print(e)
 
 
-def run_tensorboard(path, port=6006):
+def run_tensorboard(path, host='0.0.0.0', port=6006):
     tb = program.TensorBoard()
-    tb.configure(argv=[None, '--logdir', path, '--host', '0.0.0.0', '--port', f"{port:}"])
+    tb.configure(argv=[None, '--logdir', path, '--host', host, '--port', f"{port:}"])
     url = tb.launch()
 
     print("Running tensorboard on {}".format(url))

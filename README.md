@@ -26,6 +26,9 @@ model.fit(train_dataset)
 ## gpu
 ### allow_gpu_memory_growth
 
+## transfer_learning
+### get_transfer_learning_model
+
 # Getting started
 ## pip install
 ```
