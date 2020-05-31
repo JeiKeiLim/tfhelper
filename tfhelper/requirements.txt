@@ -1,0 +1,5 @@
+tensorflow>=2.2.0
+matplotlib>=3.2.1
+seaborn>=0.10.1
+tensorflow_model_optimization>=0.3.0
+pandas>=1.0.4
