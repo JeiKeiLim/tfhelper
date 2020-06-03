@@ -10,17 +10,20 @@ import time
 
 
 class ConfuseCallback(tf.keras.callbacks.Callback):
-    def __init__(self, test_data, test_labels, classes, file_writer, figure_size=(12, 10)):
+    def __init__(self, x_test, y_test, file_writer, label_names=None, figure_size=(12, 10)):
         super(ConfuseCallback, self).__init__()
-        self.test_data = test_data
-        self.test_labels = test_labels
-        self.classes = classes
+        self.x_test = x_test
+        self.y_test = y_test if len(y_test.shape) == 1 else np.argmax(y_test, axis=1)
         self.file_writer = file_writer
         self.figure_size = figure_size
+        self.label_names = label_names
+
+        if self.label_names is None:
+            self.label_names = ["Class {:02d}".format(unique_label) for unique_label in np.unique(self.y_test)]
 
     def get_precision_recall_plot(self, con_mat):
-        precisions = np.array([0] * len(self.classes)).astype('float32')
-        recalls = np.array([0] * len(self.classes)).astype('float32')
+        precisions = np.array([0] * len(self.label_names)).astype('float32')
+        recalls = np.array([0] * len(self.label_names)).astype('float32')
 
         for i in range(con_mat.shape[0]):
             tp = con_mat[i, i]
@@ -37,7 +40,7 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
             precisions[i] = max(0, tp / (tp + fp))
             recalls[i] = max(0, tp / (tp + fn))
 
-        df = pd.DataFrame((self.classes, precisions, recalls)).T
+        df = pd.DataFrame((self.label_names, precisions, recalls)).T
         df.columns = ["Class", "Precision", "Recall"]
         df = pd.melt(df, id_vars="Class", var_name="Type", value_name="Value")
 
@@ -56,15 +59,16 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         try:
-            test_pred = self.model.predict(self.test_data)
+            test_pred = self.model.predict(self.x_test)
             test_pred = tf.argmax(test_pred, axis=1)
-            accuracy = np.sum(test_pred == self.test_labels) / self.test_labels.shape[0]
-            con_mat = tf.math.confusion_matrix(labels=self.test_labels, predictions=test_pred).numpy()
+            accuracy = np.sum(test_pred == self.y_test) / self.y_test.shape[0]
+
+            con_mat = tf.math.confusion_matrix(labels=self.y_test, predictions=test_pred).numpy()
             con_mat_norm = np.around(con_mat.astype('float') / con_mat.sum(axis=1)[:, np.newaxis], decimals=2)
 
             con_mat_df = pd.DataFrame(con_mat_norm,
-                                      index=self.classes,
-                                      columns=self.classes)
+                                      index=self.label_names,
+                                      columns=self.label_names)
 
             precision_recall_image, precisions, recalls = self.get_precision_recall_plot(con_mat)
 
@@ -137,8 +141,9 @@ def wait_ctrl_c(pre_msg="Press Ctrl+c to quit Tensorboard", post_msg="\nExit."):
 
 def get_tf_callbacks(root,
                      tboard_callback=True, tboard_update_freq='epoch', tboard_histogram_freq=1, tboard_profile_batch=0,
-                     confuse_callback=True, label_info=None, test_generator_=None, figure_size=(12, 10),
-                     modelsaver_callback=True, best_loss=float('inf'), save_root=None, best_epoch=0):
+                     confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, y_argmax=False, figure_size=(12, 10),
+                     modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0,
+                     earlystop_callback=True, earlystop_monitor='val_loss', earlystop_patience=0, earlystop_restore_weights=True):
     postfix = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     log_root_ = "{}{}/".format(root, postfix)
 
@@ -151,14 +156,18 @@ def get_tf_callbacks(root,
                                                          profile_batch=tboard_profile_batch)
                          )
 
-    #TODO: generate label_info if not given
     if confuse_callback:
         file_writer = tf.summary.create_file_writer("{}/cm".format(log_root_, postfix))
-        callbacks_.append(ConfuseCallback(test_generator_.data['test_data'],
-                                          test_generator_.data['test_label'],
-                                          list(label_info.keys()),
-                                          file_writer, figure_size=figure_size)
-                          )
+        x_test = test_generator_.data['test_data'] if test_generator_ is not None else x_test
+        y_test = test_generator_.data['test_label'] if test_generator_ is not None else y_test
+
+        if x_test is not None and y_test is not None:
+            callbacks_.append(ConfuseCallback(x_test, y_test,
+                                              file_writer,
+                                              label_names=label_info,
+                                              y_argmax=y_argmax,
+                                              figure_size=figure_size)
+                              )
 
     if modelsaver_callback:
         if not save_root:
@@ -166,5 +175,9 @@ def get_tf_callbacks(root,
         callbacks_.append(
             ModelSaverCallback(best_loss=best_loss, save_root=save_root, epoch=best_epoch)
         )
+
+    if earlystop_callback:
+        callbacks_.append(tf.keras.callbacks.EarlyStopping(monitor=earlystop_monitor, patience=earlystop_patience,
+                                                           restore_best_weights=earlystop_restore_weights))
 
     return callbacks_, log_root_

@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="tfhelper",
-    version="0.0.4",
+    version="0.0.8",
     license='MIT',
     author="Jongkuk Lim",
     author_email="lim.jeikei@gmail.com",
@@ -23,5 +23,6 @@ setuptools.setup(
         'seaborn>=0.10.1',
         'tensorflow_model_optimization>=0.3.0',
         'pandas>=1.0.3',
+        'opencv-python>=4.2.0'
       ],
 )
