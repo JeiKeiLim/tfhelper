@@ -10,13 +10,13 @@ import time
 
 
 class ConfuseCallback(tf.keras.callbacks.Callback):
-    def __init__(self, x_test, y_test, file_writer, label_names=None, figure_size=(12, 10)):
+    def __init__(self, x_test, y_test, file_writer, class_names=None, figure_size=(12, 10)):
         super(ConfuseCallback, self).__init__()
         self.x_test = x_test
         self.y_test = y_test if len(y_test.shape) == 1 else np.argmax(y_test, axis=1)
         self.file_writer = file_writer
         self.figure_size = figure_size
-        self.label_names = label_names
+        self.label_names = class_names
 
         if self.label_names is None:
             self.label_names = ["Class {:02d}".format(unique_label) for unique_label in np.unique(self.y_test)]
