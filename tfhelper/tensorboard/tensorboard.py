@@ -10,15 +10,37 @@ import time
 
 
 class ConfuseCallback(tf.keras.callbacks.Callback):
-    def __init__(self, x_test, y_test, file_writer, class_names=None, figure_size=(12, 10)):
+    def __init__(self, x_test, y_test, file_writer, dataset=None, class_names=None, figure_size=(12, 10), batch_size=32):
+        """
+
+        :param x_test: (array) - (n data, data dimension(Ex. 32x32x3 or 600x30 ..., etc). If None is given, dataset must be provided.
+        :param y_test: (array) - (n data, ). If None is given, dataset must be provided.
+        :param file_writer: TensorBoard File Writer
+        :param dataset: (TensorFlow Dataset). If dataset is given, x_test and y_test is ignored. Default: None.
+        :param class_names: (array(str)) - Names of class. If None, default names are set to (Class01, Class02 ...). Default: None.
+        :param figure_size: (tuple) - Figure size of confusion matrix. Default: (12, 10).
+        :param batch_size: (int) - Batch size to predict x_test. If dataset is given, batch_size is ignored and batch size set in dataset is used.
+        """
         super(ConfuseCallback, self).__init__()
+        self.dataset = dataset
         self.x_test = x_test
-        self.y_test = y_test if len(y_test.shape) == 1 else np.argmax(y_test, axis=1)
+        self.y_test = y_test
+
+        if self.y_test is None and self.dataset is not None:
+            self.y_test = []
+            for i, xy in self.dataset.enumerate():
+                y = xy[1].numpy()
+                self.y_test = np.concatenate([self.y_test, y])
+            self.y_test = self.y_test.astype(np.int32)
+
+        self.y_test = self.y_test if len(y_test.shape) == 1 else np.argmax(y_test, axis=1)
+
         self.file_writer = file_writer
         self.figure_size = figure_size
         self.label_names = class_names
+        self.batch_size = batch_size
 
-        if self.label_names is None:
+        if self.label_names is None and self.y_test is not None:
             self.label_names = ["Class {:02d}".format(unique_label) for unique_label in np.unique(self.y_test)]
 
     def get_precision_recall_plot(self, con_mat):
@@ -58,9 +80,20 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
         return image, precisions, recalls
 
     def on_epoch_end(self, epoch, logs=None):
+        if self.dataset is None and (self.x_test is None or self.y_test is None):
+            return
+
         try:
-            test_pred = self.model.predict(self.x_test)
-            test_pred = tf.argmax(test_pred, axis=1)
+            if self.dataset is None:
+                test_pred = []
+                for b in range(0, self.x_test.shape[0], self.batch_size):
+                    x_feed = self.x_test[b:b+self.batch_size]
+                    pred = self.model.predict(x_feed)
+                    pred = np.argmax(pred, axis=1)
+                    test_pred = np.concatenate([test_pred, pred])
+            else:
+                test_pred = self.model.predict(self.dataset)
+
             accuracy = np.sum(test_pred == self.y_test) / self.y_test.shape[0]
 
             con_mat = tf.math.confusion_matrix(labels=self.y_test, predictions=test_pred).numpy()
@@ -141,9 +174,38 @@ def wait_ctrl_c(pre_msg="Press Ctrl+c to quit Tensorboard", post_msg="\nExit."):
 
 def get_tf_callbacks(root,
                      tboard_callback=True, tboard_update_freq='epoch', tboard_histogram_freq=1, tboard_profile_batch=0,
-                     confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, y_argmax=False, figure_size=(12, 10),
+                     confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, test_dataset=None, figure_size=(12, 10),
                      modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0,
                      earlystop_callback=True, earlystop_monitor='val_loss', earlystop_patience=0, earlystop_restore_weights=True):
+    """
+    Get TensorFlow callbacks function for convinience
+    :param root: Root directory for TensorBoard
+    :param tboard_callback: (bool) - Whether using TensorBoard or not. Default: True
+    :param tboard_update_freq: (str) - TensorBoard update frequency. ('epoch', 'batch'). Default: 'epoch'
+    :param tboard_histogram_freq: (int) - TensorBoard histogram update frequency. Default: 1
+    :param tboard_profile_batch: (int) - TensorBoard profile timing. If 0 is given, profiling is not used.
+                                        Ex) If 10 is given, profiling is executed at batch of 10. Default: 0
+    :param confuse_callback: (bool) - Whether using confusion matrix for TensorBoard callback or not.
+                                      At least one of the following three ((x_test, y_test), test_generator_, test_dataset) must be set.
+                                      Otherwise, Confusion Matrix callback will be ignored.
+                                      Default: True.
+    :param label_info: (None or array(str))-  Default: None
+    :param x_test: (None or array) - Default: None
+    :param y_test: (None or array) = Default: None
+    :param test_generator_: (None or HDF5Generator) - Default: None. For HDF5Generator test set purpose.
+    :param test_dataset: (None or TensorFlow Dataset) - Default: None.
+    :param figure_size: (tuple) - Figure Size of Confusion Matrix.
+    :param modelsaver_callback: (bool) - Whether using ModelSaver callback or not. Saving the model file when the lowest validation loss is given per each epochs.
+                                        Default: False.
+    :param best_loss:
+    :param save_root:
+    :param best_epoch:
+    :param earlystop_callback:
+    :param earlystop_monitor:
+    :param earlystop_patience:
+    :param earlystop_restore_weights:
+    :return:
+    """
     postfix = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     log_root_ = "{}{}/".format(root, postfix)
 
@@ -158,14 +220,16 @@ def get_tf_callbacks(root,
 
     if confuse_callback:
         file_writer = tf.summary.create_file_writer("{}/cm".format(log_root_, postfix))
+
         x_test = test_generator_.data['test_data'] if test_generator_ is not None else x_test
         y_test = test_generator_.data['test_label'] if test_generator_ is not None else y_test
 
         if x_test is not None and y_test is not None:
-            callbacks_.append(ConfuseCallback(x_test, y_test,
-                                              file_writer,
-                                              label_names=label_info,
-                                              y_argmax=y_argmax,
+            callbacks_.append(ConfuseCallback(x_test, y_test, file_writer, class_names=label_info,
+                                              figure_size=figure_size)
+                              )
+        elif test_dataset is not None:
+            callbacks_.append(ConfuseCallback(None, None, file_writer, dataset=test_dataset, class_names=label_info,
                                               figure_size=figure_size)
                               )
 

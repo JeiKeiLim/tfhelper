@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="tfhelper",
-    version="0.0.12",
+    version="0.0.18",
     license='MIT',
     author="Jongkuk Lim",
     author_email="lim.jeikei@gmail.com",
