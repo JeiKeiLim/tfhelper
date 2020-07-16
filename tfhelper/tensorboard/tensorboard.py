@@ -93,6 +93,7 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
                     test_pred = np.concatenate([test_pred, pred])
             else:
                 test_pred = self.model.predict(self.dataset)
+                test_pred = np.argmax(test_pred, axis=1)
 
             accuracy = np.sum(test_pred == self.y_test) / self.y_test.shape[0]
 
