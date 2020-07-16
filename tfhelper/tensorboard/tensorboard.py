@@ -33,7 +33,7 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
                 self.y_test = np.concatenate([self.y_test, y])
             self.y_test = self.y_test.astype(np.int32)
 
-        self.y_test = self.y_test if len(y_test.shape) == 1 else np.argmax(y_test, axis=1)
+        self.y_test = self.y_test if len(self.y_test.shape) == 1 else np.argmax(self.y_test, axis=1)
 
         self.file_writer = file_writer
         self.figure_size = figure_size
