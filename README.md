@@ -1,9 +1,22 @@
 # tfhelper
 Your friendly Tensorflow 2.x neighbor.
 
-# Usage
-## dataset
-### HDF5Generator
+Documentation: https://jeikeilim.github.io/tfhelper/
+
+
+## Environments
+- Python 3.7
+
+# Getting started
+## pip install
+```
+pip install tfhelper
+```
+
+
+# Structure
+## tfhelper.dataset
+- HDF5Generator
 ```python
 from tfhelper.dataset import HDF5Generator
 
@@ -16,25 +29,25 @@ model = Define some model
 model.fit(train_dataset)
 ```
 
-## tensorboard
-### ConfuseCallback
-### ModelSaverCallback
-### run_tensorboard
-### wait_ctrl_c
-### get_tf_callbacks
+## tfhelper.gpu
+- allow_gpu_memory_growth
+## tfhelper.tensorboard
+- ConfuseCallback
+- ModelSaverCallback
+- SparsityCallback
+- run_tensorboard
+- wait_ctrl_c
+- get_tf_callbacks
+## tfhelper.tflite
+- keras_model_to_tflite
+- parse_config
+- predict_tflite_interpreter
+- evaluate_tflite_interpreter
+- load_pruned_model
+## tfhelper.transfler_learning
+- get_transfer_learning_model
+## tfhelper.visualization
+- get_cam_image
 
-## gpu
-### allow_gpu_memory_growth
 
-## transfer_learning
-### get_transfer_learning_model
-
-# Getting started
-## pip install
-```
-pip install tfhelper
-```
-
-## Environments
-- Python 3.7
 
