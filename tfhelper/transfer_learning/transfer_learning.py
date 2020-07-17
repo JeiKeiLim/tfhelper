@@ -5,6 +5,24 @@ def get_transfer_learning_model(target_model=tf.keras.applications.VGG19,
                                 input_shape=(32, 32, 3), weights='imagenet', n_class=10,
                                 optimizer='adam', loss='SparseCategoricalCrossentropy', metrics=('accuracy'),
                                 base_model_only=False):
+    """
+    Get TensorFlow models for transfer learning.
+    Under progress. We do not recommend to use this function.
+
+    Args:
+        target_model (tf.keras.models.Model): tf.keras.applications. ...
+        input_shape (tuple): Input shape
+        weights (None, str): 'imagenet'
+        n_class (int): Number of classes
+        optimizer (str, tf.keras.optimizers.Optimizer): Optimizer
+        loss (str, tf.keras.losses.Losses): Loss function
+        metrics (list of str): Metrics
+        base_model_only (bool): True - Not appending custom layer
+                                False - Appending custom layer
+
+    Returns:
+
+    """
 
     base_model_ = target_model(input_shape=input_shape, include_top=False, weights=weights)
 

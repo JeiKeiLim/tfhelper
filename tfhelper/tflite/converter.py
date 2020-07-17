@@ -3,17 +3,21 @@ import tensorflow as tf
 
 def keras_model_to_tflite(model, config):
     """
+    Convert Keras model to tflite model
 
-    :param model:
-    :param config: (dict) configuration info Ex)
-    {
-      "quantization": false,
-      "quantization_type": "int8",  # ["int8", "float16", "float32"]
-      "tf_ops": false,
-      "exp_converter": false,
-      "out_path": "/writing/tflite/model/path"
-    }
-    :return:
+    Args:
+        model (tf.keras.models.Model): TensorFlow Model
+        config (dict): configuration info Ex)
+                        {
+                          "quantization": false,
+                          "quantization_type": "int8",  # ["int8", "float16", "float32"]
+                          "tf_ops": false,
+                          "exp_converter": false,
+                          "out_path": "/writing/tflite/model/path"
+                        }
+
+    Returns:
+        The converted tflite model data in serialized format.
     """
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
@@ -52,7 +56,18 @@ def keras_model_to_tflite(model, config):
 
 
 def parse_config(config):
+    """
+    Parse config dict in keras_model_to_tflite
+    Converts data type written as str to tf dtypes
+    'float32' -> tf.float32
+    'float16' -> tf.float16
+    'int8' -> tf.int8
 
+    Args:
+        config (dict): tflite config dict from keras_model_to_tflite
+    Returns:
+        dict: Converted config
+    """
     qtype = config['quantization_type']
     config['quantization_type'] = tf.float16 if qtype == "float16" else tf.int8 if qtype == "int8" else tf.float32
 

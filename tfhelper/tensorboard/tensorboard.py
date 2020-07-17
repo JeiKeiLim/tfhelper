@@ -7,19 +7,24 @@ import io
 from tensorboard import program
 import datetime
 import time
+import os
+import glob
 
 
 class ConfuseCallback(tf.keras.callbacks.Callback):
+    """
+    Generate Confusion Matrix and write an image to TensorBoard
+    """
     def __init__(self, x_test, y_test, file_writer, dataset=None, class_names=None, figure_size=(12, 10), batch_size=32):
         """
-
-        :param x_test: (array) - (n data, data dimension(Ex. 32x32x3 or 600x30 ..., etc). If None is given, dataset must be provided.
-        :param y_test: (array) - (n data, ). If None is given, dataset must be provided.
-        :param file_writer: TensorBoard File Writer
-        :param dataset: (TensorFlow Dataset). If dataset is given, x_test and y_test is ignored. Default: None.
-        :param class_names: (array(str)) - Names of class. If None, default names are set to (Class01, Class02 ...). Default: None.
-        :param figure_size: (tuple) - Figure size of confusion matrix. Default: (12, 10).
-        :param batch_size: (int) - Batch size to predict x_test. If dataset is given, batch_size is ignored and batch size set in dataset is used.
+        Args:
+            x_test (np.ndarray): (n data, data dimension(Ex. 32x32x3 or 600x30 ..., etc). If None is given, dataset must be provided.
+            y_test (np.ndarray): (n data, ). If None is given, dataset must be provided.
+            file_writer (tf.summary.SummaryWriter): TensorBoard File Writer
+            dataset (tf.keras.dataset.Dataset): If dataset is given, x_test and y_test is ignored. Default: None.
+            class_names (list of str): Names of class. If None, default names are set to (Class01, Class02 ...). Default: None.
+            figure_size (tuple): Figure size of confusion matrix. Default: (12, 10).
+            batch_size (int): Batch size to predict x_test. If dataset is given, batch_size is ignored and batch size set in dataset is used.
         """
         super(ConfuseCallback, self).__init__()
         self.dataset = dataset
@@ -44,6 +49,16 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
             self.label_names = ["Class {:02d}".format(unique_label) for unique_label in np.unique(self.y_test)]
 
     def get_precision_recall_plot(self, con_mat):
+        """
+        Generate Precision and Recall plot bar plot image
+        Args:
+            con_mat (np.ndarray): Confusion Matrix array
+
+        Returns:
+            tf.TensorArray: Precision and Recall Bar Plot Image
+            np.ndarray: Precisions
+            np.ndarray: Recalls
+        """
         precisions = np.array([0] * len(self.label_names)).astype('float32')
         recalls = np.array([0] * len(self.label_names)).astype('float32')
 
@@ -132,21 +147,55 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
 
 
 class ModelSaverCallback(tf.keras.callbacks.Callback):
-    def __init__(self, best_loss=float('inf'), save_root="./", enable=True, epoch=0):
+    """
+    Saves Model at each end of the epoch when the best accuracy/loss is presented.
+    """
+    def __init__(self, best_metric=float('inf'), save_root="./", save_metric='val_loss', enable=True, epoch=0):
+        """
+
+        Args:
+            best_metric (float): Set best score of previous training session if resuming.
+            save_root (str): Model save path
+            save_metric (str): One of 'val_loss', 'val_accuracy'
+            enable (bool): Set previous epoch number if resuming
+            epoch (int): Epoch number
+        """
         super(ModelSaverCallback, self).__init__()
-        self.best_loss = best_loss
+        self.best_metric = best_metric
+        if self.best_metric == float('inf') and save_metric.find("accuracy") > 0:
+            self.best_metric = -self.best_metric
+
         self.epoch = epoch
         self.save_root = save_root
         self.enable = enable
+        self.save_metric = save_metric
 
     def on_epoch_end(self, epoch, logs=None):
         try:
             epoch += self.epoch
-            if logs['val_loss'] < self.best_loss:
-                # TODO Delete previous saved model if exists
-                file_name = '{}my_model_weight_{:04d}_{:03.2f}.h5'.format(self.save_root, epoch, logs['val_loss'])
-                print("\nBest loss! saving the model to {} ...".format(file_name))
-                self.best_loss = logs['val_loss']
+            a = logs[self.save_metric]
+            b = self.best_metric
+
+            if self.save_metric.find("accuracy") > 0:
+                a, b = b, a
+
+            if a < b:
+                p_file_list = glob.glob("{}/*.h5".format(self.save_root))
+                p_file_list = sorted(p_file_list, key=lambda x: x[-10:])
+                if self.save_metric.find("accuracy") < 0:
+                    p_file_list = p_file_list[::-1]
+
+                for i, file_path in enumerate(p_file_list):
+                    if i+1 == len(p_file_list):
+                        break
+                    try:
+                        os.remove(file_path)
+                    except:
+                        print("Error while deleting file : {}".format(file_path))
+
+                file_name = '{}/my_model_weight_{:04d}_{}_{:03.2f}.h5'.format(self.save_root, epoch, self.save_metric, logs[self.save_metric])
+                print("\nBest score! saving the model to {} ...".format(file_name))
+                self.best_metric = logs[self.save_metric]
 
                 if self.enable:
                     self.model.save(file_name)
@@ -154,7 +203,111 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
             print(e)
 
 
+class SparsityCallback(tf.keras.callbacks.Callback):
+    """
+    Computes the sparsity on each layer of the given model and saves bar plot image to the TensorBoard.
+    """
+    def __init__(self, file_writer, sparsity_threshold=0.05, figure_size=(12, 20)):
+        """
+
+        Args:
+            file_writer (tf.summary.SummaryWriter): TensorBoard File Writer
+            sparsity_threshold (float): Sparsity Threshold of each layer.
+                                        Ex) 0.05 -> Find the number of weights where -0.05 < values < 0.05 in a layer.
+                                        Percentage of the number if set to the sparsity of the layer.
+            figure_size (tuple): Figure size to generate plot image
+        """
+        super(SparsityCallback, self).__init__()
+
+        self.file_writer = file_writer
+        self.sparsity_threshold = sparsity_threshold
+        self.figure_size = list(figure_size)
+
+    def get_sparsity_plot(self, sparse_levels, sparse_layer_names):
+        """
+        Generate sparsity plot image
+
+        Args:
+            sparse_levels (np.ndarray): Sparse levels for the layer
+            sparse_layer_names (list of str, np.ndarray): Names of layer along with sparse_levels list
+
+        Returns:
+
+        """
+        width = 0.8
+
+        n_data = sparse_levels.shape[0]
+        self.figure_size[1] = 0.25 * n_data
+
+        fig, ax = plt.subplots(figsize=self.figure_size)
+        ax.barh(sparse_layer_names, sparse_levels, width)
+
+        for i, v in enumerate(sparse_levels):
+            ax.text(v + 0.005, i - .15, f"{v * 100:.2f}%", color='k', fontweight='bold')
+
+        ax.set_title(f"Sparsity Threshold: {self.sparsity_threshold}, Mean Sparsity: {sparse_levels.mean()*100:.2f}%")
+        ax.set_xlim(0.0, 1.0)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png')
+        plt.close(fig)
+
+        image = tf.image.decode_png(buf.getvalue(), channels=4)
+        image = tf.expand_dims(image, 0)
+
+        return image
+
+    def on_epoch_end(self, epoch, logs=None):
+        sparsities = self.compute_sparsity()
+        layer_names = [layer.name for layer in self.model.layers]
+
+        sparse_levels = []
+        sparse_layer_names = []
+
+        for i, (sparsity, layer_name) in enumerate(zip(sparsities, layer_names)):
+            if np.isnan(sparsity):
+                continue
+            sparse_levels = np.concatenate([sparse_levels, [sparsity]])
+            sparse_layer_names = np.concatenate([sparse_layer_names, [f"{i:03d}: {layer_name}"]])
+
+        try:
+            sparsity_image = self.get_sparsity_plot(sparse_levels, sparse_layer_names)
+
+            with self.file_writer.as_default():
+                tf.summary.image("Sparsity Levels of Each Layer", sparsity_image, step=epoch)
+        except Exception as e:
+            print(e)
+
+    def compute_sparsity(self):
+        sparsities = np.zeros(len(self.model.layers))
+
+        for i in range(sparsities.shape[0]):
+            if len(self.model.layers[i].weights) < 1:
+                sparsities[i] = np.nan
+                continue
+
+            sparse_index = np.argwhere(
+                np.logical_and(self.model.layers[i].weights[0].numpy().flatten() < self.sparsity_threshold,
+                               self.model.layers[i].weights[0].numpy().flatten() > -self.sparsity_threshold))
+
+            sparsities[i] = sparse_index.shape[0] / np.prod(self.model.layers[i].weights[0].shape)
+
+        return sparsities
+
+
 def run_tensorboard(path, host='0.0.0.0', port=6006):
+    """
+    Run TensorBoard in python script.
+    Args:
+        path (str): TensorBoard log dir
+        host(str): Host address for TensorBoard.
+                    127.0.0.1 -> localhost.
+                    0.0.0.0 -> Allow remote connection.
+        port (int): Port number for TensorBoard
+
+    Returns:
+        None
+    """
     tb = program.TensorBoard()
     tb.configure(argv=[None, '--logdir', path, '--host', host, '--port', f"{port:}"])
     url = tb.launch()
@@ -165,6 +318,15 @@ def run_tensorboard(path, host='0.0.0.0', port=6006):
 
 
 def wait_ctrl_c(pre_msg="Press Ctrl+c to quit Tensorboard", post_msg="\nExit."):
+    """
+    Wait until ctrl+c is pressed. This function is to prevent quitting python process when the training is completed when TensorBoard is running.
+    Args:
+        pre_msg: Message prior to wait ctrl+c
+        post_msg: Message post to ctrl+c pressed
+
+    Returns:
+        None
+    """
     print(pre_msg)
     try:
         while True:
@@ -176,36 +338,47 @@ def wait_ctrl_c(pre_msg="Press Ctrl+c to quit Tensorboard", post_msg="\nExit."):
 def get_tf_callbacks(root,
                      tboard_callback=True, tboard_update_freq='epoch', tboard_histogram_freq=1, tboard_profile_batch=0,
                      confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, test_dataset=None, figure_size=(12, 10),
-                     modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0,
-                     earlystop_callback=True, earlystop_monitor='val_loss', earlystop_patience=0, earlystop_restore_weights=True):
+                     modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0, save_metric='val_loss',
+                     earlystop_callback=True, earlystop_monitor='val_loss', earlystop_patience=0, earlystop_restore_weights=True,
+                     sparsity_callback=False, sparsity_threshold=0.05):
     """
-    Get TensorFlow callbacks function for convinience
-    :param root: Root directory for TensorBoard
-    :param tboard_callback: (bool) - Whether using TensorBoard or not. Default: True
-    :param tboard_update_freq: (str) - TensorBoard update frequency. ('epoch', 'batch'). Default: 'epoch'
-    :param tboard_histogram_freq: (int) - TensorBoard histogram update frequency. Default: 1
-    :param tboard_profile_batch: (int) - TensorBoard profile timing. If 0 is given, profiling is not used.
-                                        Ex) If 10 is given, profiling is executed at batch of 10. Default: 0
-    :param confuse_callback: (bool) - Whether using confusion matrix for TensorBoard callback or not.
-                                      At least one of the following three ((x_test, y_test), test_generator_, test_dataset) must be set.
-                                      Otherwise, Confusion Matrix callback will be ignored.
-                                      Default: True.
-    :param label_info: (None or array(str))-  Default: None
-    :param x_test: (None or array) - Default: None
-    :param y_test: (None or array) = Default: None
-    :param test_generator_: (None or HDF5Generator) - Default: None. For HDF5Generator test set purpose.
-    :param test_dataset: (None or TensorFlow Dataset) - Default: None.
-    :param figure_size: (tuple) - Figure Size of Confusion Matrix.
-    :param modelsaver_callback: (bool) - Whether using ModelSaver callback or not. Saving the model file when the lowest validation loss is given per each epochs.
+    Getting TensorFlow callbacks function for convenience purpose.
+    Args:
+        root (str): Root directory for TensorBoard
+        tboard_callback (bool): Whether using TensorBoard or not. Default: True
+        tboard_update_freq (str): TensorBoard update frequency. ('epoch', 'batch'). Default: 'epoch'
+        tboard_histogram_freq (int): TensorBoard histogram update frequency. Default: 1
+        tboard_profile_batch (int): TensorBoard profile timing. If 0 is given, profiling is not used.
+                                Ex) If 10 is given, profiling is executed at batch of 10. Default: 0
+        confuse_callback (bool): Whether using confusion matrix for TensorBoard callback or not.
+                          At least one of the following three ((x_test, y_test), test_generator_, test_dataset) must be set.
+                          Otherwise, Confusion Matrix callback will be ignored.
+                          Default: True.
+        label_info (list of str): Names of class. If None, default names are set to (Class01, Class02 ...). Default: None.
+        x_test (np.ndarray, None): (n data, data dimension(Ex. 32x32x3 or 600x30 ..., etc). If None is given, dataset must be provided.
+        y_test (np.ndarray, None): (n data, ). If None is given, dataset must be provided.
+        test_generator_ (tfhelper.dataset.HDF5Generator, None): Default: None. For HDF5Generator test set purpose.
+        test_dataset (tf.dataset.Dataset, None): Default: None.
+        figure_size (tuple): Figure Size of Confusion Matrix.
+        modelsaver_callback (bool): Whether using ModelSaver callback or not. Saving the model file when the lowest validation loss is given per each epochs.
                                         Default: False.
-    :param best_loss:
-    :param save_root:
-    :param best_epoch:
-    :param earlystop_callback:
-    :param earlystop_monitor:
-    :param earlystop_patience:
-    :param earlystop_restore_weights:
-    :return:
+        best_loss (float): Set best score of previous training session if resuming.
+        save_root (str): Model save path
+        best_epoch (int): Previous Best epoch number if resuming
+        save_metric (str): One of 'val_loss', 'val_accuracy'
+        earlystop_callbac (bool): Early Stop callback
+        earlystop_monitor (str): Earlys top_monitor metric 'val_loss', 'val_accuracy'
+        earlystop_patience (int): Early stop patience
+        earlystop_restore_weights (bool): Restore weights on early stop.
+        sparsity_callback (bool): Sparsity callback.
+        sparsity_threshold (float): Sparsity Threshold of each layer.
+                            Ex) 0.05 -> Find the number of weights where -0.05 < values < 0.05 in a layer.
+                            Percentage of the number if set to the sparsity of the layer.
+
+    Returns:
+        list of tf.keras.callbacks.Callback: Callback List
+        str: Tensor Board Log Root Directory
+
     """
     postfix = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     log_root_ = "{}{}/".format(root, postfix)
@@ -238,11 +411,18 @@ def get_tf_callbacks(root,
         if not save_root:
             save_root = log_root_
         callbacks_.append(
-            ModelSaverCallback(best_loss=best_loss, save_root=save_root, epoch=best_epoch)
+            ModelSaverCallback(best_metric=best_loss, save_root=save_root, epoch=best_epoch, save_metric=save_metric)
         )
 
     if earlystop_callback:
         callbacks_.append(tf.keras.callbacks.EarlyStopping(monitor=earlystop_monitor, patience=earlystop_patience,
                                                            restore_best_weights=earlystop_restore_weights))
+
+    if sparsity_callback:
+        file_writer = tf.summary.create_file_writer("{}/sparsity".format(log_root_, postfix))
+
+        callbacks_.append(
+            SparsityCallback(file_writer, sparsity_threshold=sparsity_threshold)
+        )
 
     return callbacks_, log_root_

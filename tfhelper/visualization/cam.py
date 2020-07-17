@@ -4,6 +4,19 @@ import cv2
 
 
 def get_cam_image(model_, x, img_size=(28, 28), layer_idx=None):
+    """
+    Get CAM image from a model and x
+
+    Args:
+        model_ (tf.keras.models.Model): TensorFlow Model
+        x (np.ndarray): Test Data
+        img_size (tuple): Image size for x
+        layer_idx (int): Layer Index to generate CAM.
+                         If None, last layer of Conv2D will be chosen.
+    Returns:
+        np.ndarray: CAM image array
+
+    """
     if layer_idx is None:
         for layer_idx in range(len(model_.layers) - 1, -1, -1):
             if type(model_.layers[layer_idx]) == tf.keras.layers.Conv2D:

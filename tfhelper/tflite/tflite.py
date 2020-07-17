@@ -4,6 +4,17 @@ import tensorflow_model_optimization as tfmot
 
 
 def predict_tflite_interpreter(interpreter, x_, predict_class=True):
+    """
+    Predict x_ with tflite interpreter
+
+    Args:
+        interpreter (tf.lite.Interpreter): TF Lite Interpreter
+        x_ (np.ndarray): test data
+        predict_class (bool): True: return argmax(result).
+                              False: return as is
+    Returns:
+        np.array: Predicted Label or Values of top layer.
+    """
     input_index = interpreter.get_input_details()[0]["index"]
     output_index = interpreter.get_output_details()[0]["index"]
 
@@ -15,6 +26,18 @@ def predict_tflite_interpreter(interpreter, x_, predict_class=True):
 
 
 def evaluate_tflite_interpreter(interpreter, x_test_, y_test_):
+    """
+    Evaluate tflite interpreter
+
+    Args:
+        interpreter (tf.lite.Interpreter): TF Lite Interpreter
+        x_test_ (np.ndarray): test data
+        y_test_ (np.ndarray): test label
+
+    Returns:
+        float: Accuracy
+        np.ndarray: Prediction Results
+    """
     prediction_result = []
     for x in x_test_:
         predict_label, _ = predict_tflite_interpreter(interpreter, x)
@@ -27,6 +50,14 @@ def evaluate_tflite_interpreter(interpreter, x_test_, y_test_):
 
 
 def load_pruned_model(file_path, strip_model=True):
+    """
+    Load pruned TensorFlow Keras model
+    :param file_path:
+    :type file_path: str
+    :param strip_model: True if the saved model is stripped.
+    :type strip_model: bool
+    :return:
+    """
     model_ = tf.keras.models.load_model(file_path, custom_objects={
         'PruneLowMagnitude': tfmot.sparsity.keras.pruning_wrapper.PruneLowMagnitude})
     model_ = tfmot.sparsity.keras.strip_pruning(model_) if strip_model else model_

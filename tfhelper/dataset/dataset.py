@@ -4,12 +4,17 @@ import tensorflow as tf
 
 
 class HDF5Generator:
+    """
+    TensorFlow Generator with h5py file format
+    """
+
     def __init__(self, path, data_field_name, label_field_name, verbose=1):
         """
-        :param path: HDF5 dataset path
-        :param data_field_name: data field name inside hdf5 file. ex) "train_data" or "test_data"
-        :param label_field_name: label field name inside hdf5 file. ex) "train_label" or "test_label"
-        :param verbose:
+        Args:
+            path (str): HDF5 dataset path
+            data_field_name (str): data field name inside hdf5 file. ex) "train_data" or "test_data"
+            label_field_name (str): label field name inside hdf5 file. ex) "train_label" or "test_label"
+            verbose (int):
         """
         self.path = path
         self.data = h5py.File(self.path, 'r')
@@ -37,6 +42,18 @@ class HDF5Generator:
                 yield (d, l)
 
     def get_dataset(self, input_shape=(300, 30), batch_size=32, shuffle=False, n_shuffle=10000):
+        """
+        Get tf.data.Dataset type from the generator. Currently, data and label types are tf.float32 and tf.int8
+        Args:
+            input_shape (tuple): Input shape
+            batch_size (int): Batch size
+            shuffle (bool): Shuffle
+            n_shuffle (int): buffer size for shuffle
+
+        Returns:
+            tf.data.Dataset: TensorFlow Dataset
+        """
+
         d_set = tf.data.Dataset.from_generator(
             self,
             (tf.float32, tf.int8),
@@ -47,6 +64,12 @@ class HDF5Generator:
         return d_set.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE).repeat()
 
     def nan_check(self):
+        """
+        Check if nan exists in self.data
+        Returns:
+            bool: True or False
+        """
+
         is_nan = False
         data_field = self.data[self.data_field_name]
         for i in range(data_field.shape[0]):
