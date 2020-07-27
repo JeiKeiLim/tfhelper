@@ -9,22 +9,24 @@ import datetime
 import time
 import os
 import glob
+import matplotlib.font_manager as fm
 
 
 class ConfuseCallback(tf.keras.callbacks.Callback):
     """
     Generate Confusion Matrix and write an image to TensorBoard
     """
-    def __init__(self, x_test, y_test, file_writer, dataset=None, class_names=None, figure_size=(12, 10), batch_size=32):
+    def __init__(self, x_test, y_test, file_writer, dataset=None, class_names=None, figure_size=(12, 10), batch_size=32, model_out_idx=-1):
         """
         Args:
-            x_test (np.ndarray): (n data, data dimension(Ex. 32x32x3 or 600x30 ..., etc). If None is given, dataset must be provided.
-            y_test (np.ndarray): (n data, ). If None is given, dataset must be provided.
+            x_test (None, np.ndarray): (n data, data dimension(Ex. 32x32x3 or 600x30 ..., etc). If None is given, dataset must be provided.
+            y_test (None, np.ndarray): (n data, ). If None is given, dataset must be provided.
             file_writer (tf.summary.SummaryWriter): TensorBoard File Writer
             dataset (tf.keras.dataset.Dataset): If dataset is given, x_test and y_test is ignored. Default: None.
             class_names (list of str): Names of class. If None, default names are set to (Class01, Class02 ...). Default: None.
             figure_size (tuple): Figure size of confusion matrix. Default: (12, 10).
             batch_size (int): Batch size to predict x_test. If dataset is given, batch_size is ignored and batch size set in dataset is used.
+            model_out_idx (int): If Model has multiple output, set this value for evaluation. -1: No output index
         """
         super(ConfuseCallback, self).__init__()
         self.dataset = dataset
@@ -44,9 +46,17 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
         self.figure_size = figure_size
         self.label_names = class_names
         self.batch_size = batch_size
+        self.model_out_idx = model_out_idx
 
         if self.label_names is None and self.y_test is not None:
             self.label_names = ["Class {:02d}".format(unique_label) for unique_label in np.unique(self.y_test)]
+
+        # For Korean Label
+        font_list = [font.name for font in fm.fontManager.ttflist]
+        possible_fonts = [font_name for font_name in font_list if font_name.find("CJK") >=0]
+        if len(possible_fonts) > 0:
+            plt.rcParams['axes.unicode_minus'] = False
+            plt.rcParams['font.family'] = possible_fonts[0]
 
     def get_precision_recall_plot(self, con_mat):
         """
@@ -104,10 +114,16 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
                 for b in range(0, self.x_test.shape[0], self.batch_size):
                     x_feed = self.x_test[b:b+self.batch_size]
                     pred = self.model.predict(x_feed)
+                    if self.model_out_idx >= 0:
+                        pred = pred[self.model_out_idx]
+
                     pred = np.argmax(pred, axis=1)
                     test_pred = np.concatenate([test_pred, pred])
             else:
                 test_pred = self.model.predict(self.dataset)
+                if self.model_out_idx >= 0:
+                    test_pred = test_pred[self.model_out_idx]
+
                 test_pred = np.argmax(test_pred, axis=1)
 
             accuracy = np.sum(test_pred == self.y_test) / self.y_test.shape[0]
@@ -150,7 +166,7 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
     """
     Saves Model at each end of the epoch when the best accuracy/loss is presented.
     """
-    def __init__(self, best_metric=float('inf'), save_root="./", save_metric='val_loss', enable=True, epoch=0):
+    def __init__(self, best_metric=float('inf'), save_root="./", save_metric='val_loss', file_name="my_model", enable=True, epoch=0):
         """
 
         Args:
@@ -169,6 +185,7 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
         self.save_root = save_root
         self.enable = enable
         self.save_metric = save_metric
+        self.file_name = file_name
 
     def on_epoch_end(self, epoch, logs=None):
         try:
@@ -193,7 +210,7 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
                     except:
                         print("Error while deleting file : {}".format(file_path))
 
-                file_name = '{}/my_model_weight_{:04d}_{}_{:03.2f}.h5'.format(self.save_root, epoch, self.save_metric, logs[self.save_metric])
+                file_name = '{}/{}_{:04d}_{}_{:03.2f}.h5'.format(self.save_root, self.file_name, epoch, self.save_metric, logs[self.save_metric])
                 print("\nBest score! saving the model to {} ...".format(file_name))
                 self.best_metric = logs[self.save_metric]
 
@@ -201,7 +218,6 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
                     self.model.save(file_name)
         except Exception as e:
             print(e)
-
 
 class SparsityCallback(tf.keras.callbacks.Callback):
     """
@@ -247,6 +263,7 @@ class SparsityCallback(tf.keras.callbacks.Callback):
 
         ax.set_title(f"Sparsity Threshold: {self.sparsity_threshold}, Mean Sparsity: {sparse_levels.mean()*100:.2f}%")
         ax.set_xlim(0.0, 1.0)
+        fig.tight_layout()
 
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
@@ -265,8 +282,9 @@ class SparsityCallback(tf.keras.callbacks.Callback):
         sparse_layer_names = []
 
         for i, (sparsity, layer_name) in enumerate(zip(sparsities, layer_names)):
-            if np.isnan(sparsity):
+            if np.isnan(sparsity) or sparsity == 0.0:
                 continue
+
             sparse_levels = np.concatenate([sparse_levels, [sparsity]])
             sparse_layer_names = np.concatenate([sparse_layer_names, [f"{i:03d}: {layer_name}"]])
 
@@ -337,8 +355,8 @@ def wait_ctrl_c(pre_msg="Press Ctrl+c to quit Tensorboard", post_msg="\nExit."):
 
 def get_tf_callbacks(root,
                      tboard_callback=True, tboard_update_freq='epoch', tboard_histogram_freq=1, tboard_profile_batch=0,
-                     confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, test_dataset=None, figure_size=(12, 10),
-                     modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0, save_metric='val_loss',
+                     confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, test_dataset=None, figure_size=(12, 10), model_out_idx=-1,
+                     modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0, save_metric='val_loss', save_file_name="my_model",
                      earlystop_callback=True, earlystop_monitor='val_loss', earlystop_patience=0, earlystop_restore_weights=True,
                      sparsity_callback=False, sparsity_threshold=0.05):
     """
@@ -360,13 +378,15 @@ def get_tf_callbacks(root,
         test_generator_ (tfhelper.dataset.HDF5Generator, None): Default: None. For HDF5Generator test set purpose.
         test_dataset (tf.dataset.Dataset, None): Default: None.
         figure_size (tuple): Figure Size of Confusion Matrix.
+        model_out_idx (int): If Model has multiple output, set this value for evaluation. -1: No output index
         modelsaver_callback (bool): Whether using ModelSaver callback or not. Saving the model file when the lowest validation loss is given per each epochs.
                                         Default: False.
         best_loss (float): Set best score of previous training session if resuming.
         save_root (str): Model save path
         best_epoch (int): Previous Best epoch number if resuming
         save_metric (str): One of 'val_loss', 'val_accuracy'
-        earlystop_callbac (bool): Early Stop callback
+        save_file_name (str): Model Save Target File Name
+        earlystop_callback (bool): Early Stop callback
         earlystop_monitor (str): Earlys top_monitor metric 'val_loss', 'val_accuracy'
         earlystop_patience (int): Early stop patience
         earlystop_restore_weights (bool): Restore weights on early stop.
@@ -403,15 +423,15 @@ def get_tf_callbacks(root,
                                               figure_size=figure_size)
                               )
         elif test_dataset is not None:
-            callbacks_.append(ConfuseCallback(None, None, file_writer, dataset=test_dataset, class_names=label_info,
-                                              figure_size=figure_size)
+            callbacks_.append(ConfuseCallback(None, y_test, file_writer, dataset=test_dataset, class_names=label_info,
+                                              figure_size=figure_size, model_out_idx=model_out_idx)
                               )
 
     if modelsaver_callback:
         if not save_root:
             save_root = log_root_
         callbacks_.append(
-            ModelSaverCallback(best_metric=best_loss, save_root=save_root, epoch=best_epoch, save_metric=save_metric)
+            ModelSaverCallback(best_metric=best_loss, save_root=save_root, epoch=best_epoch, save_metric=save_metric, file_name=save_file_name)
         )
 
     if earlystop_callback:

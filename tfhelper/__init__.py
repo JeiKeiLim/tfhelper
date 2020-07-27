@@ -4,3 +4,5 @@ from . import dataset
 from . import transfer_learning
 from . import tflite
 from . import visualization
+from . import utils
+from . import pruning
