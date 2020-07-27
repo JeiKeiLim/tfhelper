@@ -10,13 +10,144 @@ import time
 import os
 import glob
 import matplotlib.font_manager as fm
+from abc import ABC, abstractmethod
+
+
+def prepare_matplotlib_korean_ready():
+    # For Korean Label
+    font_list = [font.name for font in fm.fontManager.ttflist]
+    possible_fonts = [font_name for font_name in font_list if font_name.find("CJK") >= 0]
+    if len(possible_fonts) > 0:
+        plt.rcParams['axes.unicode_minus'] = False
+        plt.rcParams['font.family'] = possible_fonts[0]
+
+
+def plot_to_ndarray(fig, close=True):
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')
+
+    if close:
+        plt.close(fig)
+
+    buf.seek(0)
+    image = tf.image.decode_png(buf.getvalue(), channels=4)
+    image = tf.expand_dims(image, 0)
+
+    return image
+
+
+class TBoardPlotWriterABC(ABC):
+    def __init__(self, file_writer, class_names, figure_size=(12, 10)):
+        self.file_writer = file_writer
+        self.class_names = class_names
+        self.n_classes = len(class_names)
+        self.figure_size = figure_size
+        prepare_matplotlib_korean_ready()
+
+        self.var_y_true = tf.Variable(0., validate_shape=False)
+        self.var_y_pred = tf.Variable(0., validate_shape=False)
+
+    @abstractmethod
+    def write(self, y_true, y_pred, **kwargs):
+        pass
+
+
+class ConfuseWriter(TBoardPlotWriterABC):
+    def __init__(self, *args, **kwargs):
+        super(ConfuseWriter, self).__init__(*args, **kwargs)
+
+    def write(self, y_true, y_pred, step=None, title="", logit_y=True):
+        y_true = tf.cast(tf.reshape(y_true, [-1, ]), dtype=tf.int32)
+        if logit_y:
+            y_pred = tf.math.argmax(y_pred, axis=-1)
+        y_pred = tf.cast(y_pred, dtype=y_true.dtype)
+
+        con_mat = tf.cast(tf.math.confusion_matrix(labels=y_true,
+                                                   predictions=y_pred,
+                                                   num_classes=self.n_classes),
+                          dtype=tf.float32).numpy()
+
+        con_mat_norm = np.around(con_mat.astype('float') / con_mat.sum(axis=1)[:, np.newaxis], decimals=2)
+
+        con_mat_df = pd.DataFrame(con_mat_norm,
+                                  index=self.class_names,
+                                  columns=self.class_names)
+
+        fig, ax = plt.subplots(figsize=self.figure_size)
+        sns.heatmap(con_mat_df, annot=True, cmap=plt.cm.Blues, ax=ax)
+        ax.set_ylabel('True label')
+        ax.set_xlabel('Predicted label')
+        ax.set_title(title)
+
+        fig.tight_layout()
+        image = plot_to_ndarray(fig)
+
+        with self.file_writer.as_default():
+            tf.summary.image("Confusion Matrix", image, step=step)
+
+        return con_mat
+
+
+class F1ScoreWriter(TBoardPlotWriterABC):
+    def __init__(self, *args, f1_method='harmonic', **kwargs):
+        super(F1ScoreWriter, self).__init__(*args, **kwargs)
+        self.f1_method = f1_method
+
+    def write(self, y_true, y_pred, step=None, title_prefix="", logit_y=True):
+        y_true = tf.cast(tf.reshape(y_true, [-1]), dtype=tf.int32)
+        if logit_y:
+            y_pred = tf.math.argmax(y_pred, axis=-1)
+        y_pred = tf.cast(y_pred, dtype=y_true.dtype)
+
+        con_mat = tf.cast(tf.math.confusion_matrix(labels=y_true,
+                                                   predictions=y_pred,
+                                                   num_classes=self.n_classes),
+                          dtype=tf.float32)
+
+        tp = tf.linalg.diag_part(con_mat)
+        fp = tf.reduce_sum(con_mat, axis=0) - tp
+        fn = tf.reduce_sum(con_mat, axis=1) - tp
+
+        precision = tp / (tp + fp)
+        recall = tp / (tp + fn)
+
+        precision = tf.where(tf.math.is_nan(precision), tf.zeros_like(precision), precision)
+        recall = tf.where(tf.math.is_nan(recall), tf.zeros_like(recall), recall)
+
+        if self.f1_method == 'geometric':
+            f1score = tf.sqrt(precision * recall)
+        else:
+            f1score = 2.0 * (precision * recall) / (precision + recall)
+
+        precision, recall, f1score = precision.numpy(), recall.numpy(), f1score.numpy()
+
+        df = pd.DataFrame((self.class_names, precision, recall, f1score)).T
+        df.columns = ["Class", "Precision", "Recall", f"F1Score({self.f1_method})"]
+        df = pd.melt(df, id_vars="Class", var_name="Type", value_name="Value")
+
+        fig, ax = plt.subplots(figsize=self.figure_size)
+        sns.barplot(y='Class', x='Value', hue='Type', data=df, ax=ax)
+        fig.tight_layout()
+
+        title = f"{title_prefix}, (Mean) Precision: {precision.mean()*100:.3f}%, " \
+                f"Recall: {recall.mean()*100:.3f}%, F1Score({self.f1_method}): {f1score.mean():.7f}"
+
+        ax.set_title(title)
+
+        image = plot_to_ndarray(fig)
+
+        with self.file_writer.as_default():
+            tf.summary.image("Precision/Recall/F1({}) score".format(self.f1_method), image, step=step)
+
+        return precision, recall, f1score
 
 
 class ConfuseCallback(tf.keras.callbacks.Callback):
     """
     Generate Confusion Matrix and write an image to TensorBoard
     """
-    def __init__(self, x_test, y_test, file_writer, dataset=None, class_names=None, figure_size=(12, 10), batch_size=32, model_out_idx=-1):
+    def __init__(self, x_test, y_test, file_writer, dataset=None, class_names=None,
+                 figure_size=(12, 10), batch_size=32, model_out_idx=-1, f1_method='geometric'):
         """
         Args:
             x_test (None, np.ndarray): (n data, data dimension(Ex. 32x32x3 or 600x30 ..., etc). If None is given, dataset must be provided.
@@ -51,63 +182,14 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
         if self.label_names is None and self.y_test is not None:
             self.label_names = ["Class {:02d}".format(unique_label) for unique_label in np.unique(self.y_test)]
 
-        # For Korean Label
-        font_list = [font.name for font in fm.fontManager.ttflist]
-        possible_fonts = [font_name for font_name in font_list if font_name.find("CJK") >=0]
-        if len(possible_fonts) > 0:
-            plt.rcParams['axes.unicode_minus'] = False
-            plt.rcParams['font.family'] = possible_fonts[0]
+        self.confuse_writer = ConfuseWriter(file_writer, self.label_names, figure_size=figure_size)
+        self.f1score_writer = F1ScoreWriter(file_writer, self.label_names, f1_method=f1_method, figure_size=figure_size)
 
-    def get_precision_recall_plot(self, con_mat):
-        """
-        Generate Precision and Recall plot bar plot image
-        Args:
-            con_mat (np.ndarray): Confusion Matrix array
-
-        Returns:
-            tf.TensorArray: Precision and Recall Bar Plot Image
-            np.ndarray: Precisions
-            np.ndarray: Recalls
-        """
-        precisions = np.array([0] * len(self.label_names)).astype('float32')
-        recalls = np.array([0] * len(self.label_names)).astype('float32')
-
-        for i in range(con_mat.shape[0]):
-            tp = con_mat[i, i]
-            fn = (con_mat[i, :].sum() - tp)
-
-            fp = (con_mat[:, i].sum() - tp)
-            tn = (con_mat.diagonal().sum() - tp)
-
-            # tpr = tp / np.sum(self.test_labels[()] == i)
-            # fnr = fn / np.sum(self.test_labels[()] == i)
-            # fpr = fp / np.sum(self.test_labels[()] != i)
-            # tnr = tn / np.sum(self.test_labels[()] != i)
-
-            precisions[i] = max(0, tp / (tp + fp))
-            recalls[i] = max(0, tp / (tp + fn))
-
-        df = pd.DataFrame((self.label_names, precisions, recalls)).T
-        df.columns = ["Class", "Precision", "Recall"]
-        df = pd.melt(df, id_vars="Class", var_name="Type", value_name="Value")
-
-        figure = plt.figure(figsize=self.figure_size)
-        sns.barplot(y='Class', x='Value', hue='Type', data=df)
-        plt.tight_layout()
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        plt.close(figure)
-
-        image = tf.image.decode_png(buf.getvalue(), channels=4)
-        image = tf.expand_dims(image, 0)
-
-        return image, precisions, recalls
+        prepare_matplotlib_korean_ready()
 
     def on_epoch_end(self, epoch, logs=None):
         if self.dataset is None and (self.x_test is None or self.y_test is None):
             return
-
         try:
             if self.dataset is None:
                 test_pred = []
@@ -118,7 +200,7 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
                         pred = pred[self.model_out_idx]
 
                     pred = np.argmax(pred, axis=1)
-                    test_pred = np.concatenate([test_pred, pred])
+                    test_pred = np.concatenate([test_pred, pred], axis=0)
             else:
                 test_pred = self.model.predict(self.dataset)
                 if self.model_out_idx >= 0:
@@ -127,37 +209,13 @@ class ConfuseCallback(tf.keras.callbacks.Callback):
                 test_pred = np.argmax(test_pred, axis=1)
 
             accuracy = np.sum(test_pred == self.y_test) / self.y_test.shape[0]
+            precision, recall, f1score = self.f1score_writer.write(self.y_test, test_pred, step=epoch, logit_y=False,
+                                                                   title_prefix=f"Mean Accuracy: {accuracy*100:.3f}%")
 
-            con_mat = tf.math.confusion_matrix(labels=self.y_test, predictions=test_pred).numpy()
-            con_mat_norm = np.around(con_mat.astype('float') / con_mat.sum(axis=1)[:, np.newaxis], decimals=2)
+            title = f"Mean Accuracy: {accuracy*100:.3f}%, (Mean) Precision: {precision.mean() * 100:.3f}%, " \
+                    f"Recall: {recall.mean() * 100:.3f}%, F1Score({self.f1score_writer.f1_method}): {f1score.mean():.7f}"
 
-            con_mat_df = pd.DataFrame(con_mat_norm,
-                                      index=self.label_names,
-                                      columns=self.label_names)
-
-            precision_recall_image, precisions, recalls = self.get_precision_recall_plot(con_mat)
-
-            figure = plt.figure(figsize=self.figure_size)
-            sns.heatmap(con_mat_df, annot=True, cmap=plt.cm.Blues)
-            plt.ylabel('True label')
-            plt.xlabel('Predicted label')
-            plt.title("Accuracy : {:.2f}%, Precision : {:.2f}%, Recall : {:.2f}%".format(accuracy*100, precisions.mean()*100, recalls.mean()*100))
-
-            plt.tight_layout()
-
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-
-            plt.close(figure)
-            buf.seek(0)
-            image = tf.image.decode_png(buf.getvalue(), channels=4)
-
-            image = tf.expand_dims(image, 0)
-
-            # Log the confusion matrix as an image summary.
-            with self.file_writer.as_default():
-                tf.summary.image("Confusion Matrix", image, step=epoch)
-                tf.summary.image("Precision and Recall", precision_recall_image, step=epoch)
+            self.confuse_writer.write(self.y_test, test_pred, step=epoch, title=title, logit_y=False)
         except Exception as e:
             print(e)
 
@@ -166,7 +224,7 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
     """
     Saves Model at each end of the epoch when the best accuracy/loss is presented.
     """
-    def __init__(self, best_metric=float('inf'), save_root="./", save_metric='val_loss', file_name="my_model", enable=True, epoch=0):
+    def __init__(self, best_metric=float('inf'), save_root="./", save_metric='val_loss', file_name="my_model", enable=True, epoch=0, include_optimizer=False):
         """
 
         Args:
@@ -186,6 +244,7 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
         self.enable = enable
         self.save_metric = save_metric
         self.file_name = file_name
+        self.include_optimizer = include_optimizer
 
     def on_epoch_end(self, epoch, logs=None):
         try:
@@ -215,9 +274,10 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
                 self.best_metric = logs[self.save_metric]
 
                 if self.enable:
-                    self.model.save(file_name)
+                    self.model.save(file_name, include_top=self.include_optimizer)
         except Exception as e:
             print(e)
+
 
 class SparsityCallback(tf.keras.callbacks.Callback):
     """
