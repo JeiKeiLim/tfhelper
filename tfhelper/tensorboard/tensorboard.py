@@ -224,7 +224,9 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
     """
     Saves Model at each end of the epoch when the best accuracy/loss is presented.
     """
-    def __init__(self, best_metric=float('inf'), save_root="./", save_metric='val_loss', file_name="my_model", enable=True, epoch=0, include_optimizer=False):
+    def __init__(self, best_metric=float('inf'), save_root="./", save_metric='val_loss',
+                metric_type="loss",file_name="my_model", enable=True, epoch=0, include_optimizer=False, save_func=None,
+                 keep_only_recent=True, save_every=False, batch_save=False, batch_save_step=100):
         """
 
         Args:
@@ -233,10 +235,12 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
             save_metric (str): One of 'val_loss', 'val_accuracy'
             enable (bool): Set previous epoch number if resuming
             epoch (int): Epoch number
+            metric_type (str): (loss, score)
+            save_func (function, None): If given, it overrides model save function. Ex) save_func("save_path.h5", include_optimizer=include_optimizer)
         """
         super(ModelSaverCallback, self).__init__()
         self.best_metric = best_metric
-        if self.best_metric == float('inf') and save_metric.find("accuracy") > 0:
+        if self.best_metric == float('inf') and metric_type == "score":
             self.best_metric = -self.best_metric
 
         self.epoch = epoch
@@ -245,6 +249,25 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
         self.save_metric = save_metric
         self.file_name = file_name
         self.include_optimizer = include_optimizer
+        self.metric_type = metric_type
+        self.save_func = save_func
+        self.keep_only_recent = keep_only_recent
+        self.save_every = save_every
+        self.batch_save = batch_save
+        self.batch_save_step = batch_save_step
+
+    def save_model(self, file_name):
+        if self.enable:
+            if self.save_func:
+                self.save_func(file_name, include_optimizer=self.include_optimizer)
+            else:
+                self.model.save(file_name, include_optimizer=self.include_optimizer)
+
+    def on_train_batch_end(self, batch, logs=None):
+        if self.batch_save and batch % self.batch_save_step == 0:
+            print("\nSave model in batch ...")
+            file_name = f'{self.save_root}/{self.file_name}_{self.epoch:04d}_batch.h5'
+            self.save_model(file_name)
 
     def on_epoch_end(self, epoch, logs=None):
         try:
@@ -252,29 +275,32 @@ class ModelSaverCallback(tf.keras.callbacks.Callback):
             a = logs[self.save_metric]
             b = self.best_metric
 
-            if self.save_metric.find("accuracy") > 0:
+            if self.metric_type == "score":
                 a, b = b, a
 
-            if a < b:
+            file_name = '{}/{}_{:04d}_{}_{:03.2f}.h5'.format(self.save_root, self.file_name, epoch, self.save_metric, logs[self.save_metric])
+
+            if self.save_every:
+                self.save_model(file_name)
+            elif a < b:
                 p_file_list = glob.glob("{}/*.h5".format(self.save_root))
                 p_file_list = sorted(p_file_list, key=lambda x: x[-10:])
-                if self.save_metric.find("accuracy") < 0:
+                if self.metric_type == "loss":
                     p_file_list = p_file_list[::-1]
 
-                for i, file_path in enumerate(p_file_list):
-                    if i+1 == len(p_file_list):
-                        break
-                    try:
-                        os.remove(file_path)
-                    except:
-                        print("Error while deleting file : {}".format(file_path))
+                if self.keep_only_recent:
+                    for i, file_path in enumerate(p_file_list):
+                        if i+1 == len(p_file_list):
+                            break
+                        try:
+                            os.remove(file_path)
+                        except:
+                            print("Error while deleting file : {}".format(file_path))
 
-                file_name = '{}/{}_{:04d}_{}_{:03.2f}.h5'.format(self.save_root, self.file_name, epoch, self.save_metric, logs[self.save_metric])
                 print("\nBest score! saving the model to {} ...".format(file_name))
                 self.best_metric = logs[self.save_metric]
 
-                if self.enable:
-                    self.model.save(file_name, include_top=self.include_optimizer)
+                self.save_model(file_name)
         except Exception as e:
             print(e)
 
@@ -416,7 +442,8 @@ def wait_ctrl_c(pre_msg="Press Ctrl+c to quit Tensorboard", post_msg="\nExit."):
 def get_tf_callbacks(root,
                      tboard_callback=True, tboard_update_freq='epoch', tboard_histogram_freq=1, tboard_profile_batch=0,
                      confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, test_dataset=None, figure_size=(12, 10), model_out_idx=-1,
-                     modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0, save_metric='val_loss', save_file_name="my_model",
+                     modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0, batch_save=False,
+                     save_metric='val_loss', save_file_name="my_model", metric_type="loss", save_func=None,
                      earlystop_callback=True, earlystop_monitor='val_loss', earlystop_patience=0, earlystop_restore_weights=True,
                      sparsity_callback=False, sparsity_threshold=0.05):
     """
@@ -491,7 +518,8 @@ def get_tf_callbacks(root,
         if not save_root:
             save_root = log_root_
         callbacks_.append(
-            ModelSaverCallback(best_metric=best_loss, save_root=save_root, epoch=best_epoch, save_metric=save_metric, file_name=save_file_name)
+            ModelSaverCallback(best_metric=best_loss, save_root=save_root, epoch=best_epoch, save_metric=save_metric,
+                               file_name=save_file_name, metric_type=metric_type, save_func=save_func, batch_save=batch_save)
         )
 
     if earlystop_callback:

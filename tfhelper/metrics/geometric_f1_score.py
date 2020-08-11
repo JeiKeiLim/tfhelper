@@ -3,15 +3,18 @@ from tfhelper.utils import tfprint
 import numpy as np
 
 
-class GeometricF1Score(tf.keras.metrics.Metric):
-    def __init__(self, name="geometric_f1score", n_classes=10, debug=False, skip_nan=False, tboard_writer=None, **kwargs):
-        super(GeometricF1Score, self).__init__(name=name, **kwargs)
-        self.f1_scores = self.add_weight(name="f1score", initializer='zeros')
-        self.con_mat = tf.Variable(initial_value=np.zeros((n_classes, n_classes)), dtype=tf.float32, name="geometric_f1score_con_mat")
+class F1ScoreMetric(tf.keras.metrics.Metric):
+    def __init__(self, name="geometric_f1score", n_classes=10, debug=False, f1_method='geometric',
+                 skip_nan=False, tboard_writer=None, **kwargs):
+        super(F1ScoreMetric, self).__init__(name=name, **kwargs)
+        self.f1_scores = self.add_weight(name="f1score", initializer='zeros', aggregation=tf.VariableAggregation.MEAN)
+        self.con_mat = tf.Variable(initial_value=np.zeros((n_classes, n_classes)), dtype=tf.float32,
+                                   name="geometric_f1score_con_mat", aggregation=tf.VariableAggregation.SUM)
         self.n_classes = n_classes
         self.debug = debug
         self.skip_nan = skip_nan
         self.tboard_writer = tboard_writer
+        self.f1_method = f1_method
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         y_true = tf.cast(tf.reshape(y_true, [-1]), dtype=tf.int32)
@@ -21,6 +24,7 @@ class GeometricF1Score(tf.keras.metrics.Metric):
                                                    predictions=y_pred,
                                                    num_classes=self.n_classes),
                           dtype=tf.float32)
+
         self.con_mat.assign_add(con_mat)
 
         tp = tf.linalg.diag_part(self.con_mat)
@@ -55,7 +59,11 @@ class GeometricF1Score(tf.keras.metrics.Metric):
             tfprint(recall, name="recall", format="{:.05f}, ")
             tfprint(f1score, name="f1scores", format="{:.05f}, ")
 
-        f1score = tf.sqrt(tf.math.reduce_prod(f1score))
+        if self.f1_method == "geometric":
+            f1score = tf.sqrt(tf.math.reduce_prod(f1score))
+        else:
+            f1score = tf.reduce_mean(f1score)
+
         self.f1_scores.assign(f1score)
 
     def reset_states(self):

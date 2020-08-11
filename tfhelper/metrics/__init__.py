@@ -1,1 +1,1 @@
-from .geometric_f1_score import GeometricF1Score
+from .geometric_f1_score import F1ScoreMetric
