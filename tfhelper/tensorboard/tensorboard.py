@@ -441,7 +441,8 @@ def wait_ctrl_c(pre_msg="Press Ctrl+c to quit Tensorboard", post_msg="\nExit."):
 
 def get_tf_callbacks(root,
                      tboard_callback=True, tboard_update_freq='epoch', tboard_histogram_freq=1, tboard_profile_batch=0,
-                     confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, test_dataset=None, figure_size=(12, 10), model_out_idx=-1,
+                     confuse_callback=True, label_info=None, x_test=None, y_test=None, test_generator_=None, test_dataset=None,
+                     figure_size=(12, 10), model_out_idx=-1, confuse_batch_size=32,
                      modelsaver_callback=False, best_loss=float('inf'), save_root=None, best_epoch=0, batch_save=False,
                      save_metric='val_loss', save_file_name="my_model", metric_type="loss", save_func=None,
                      earlystop_callback=True, earlystop_monitor='val_loss', earlystop_patience=0, earlystop_restore_weights=True,
@@ -507,11 +508,11 @@ def get_tf_callbacks(root,
 
         if x_test is not None and y_test is not None:
             callbacks_.append(ConfuseCallback(x_test, y_test, file_writer, class_names=label_info,
-                                              figure_size=figure_size)
+                                              figure_size=figure_size, model_out_idx=model_out_idx, batch_size=confuse_batch_size)
                               )
         elif test_dataset is not None:
             callbacks_.append(ConfuseCallback(None, y_test, file_writer, dataset=test_dataset, class_names=label_info,
-                                              figure_size=figure_size, model_out_idx=model_out_idx)
+                                              figure_size=figure_size, model_out_idx=model_out_idx, batch_size=confuse_batch_size)
                               )
 
     if modelsaver_callback:
